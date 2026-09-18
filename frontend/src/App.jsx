@@ -1,6 +1,22 @@
 import React, { useState, useEffect, useRef } from "react";
 
-const API_BASE = import.meta.env.VITE_API_BASE || "http://127.0.0.1:8000";
+const getApiBase = () => {
+  let envBase = import.meta.env.VITE_API_BASE;
+  if (envBase) {
+    // Strip accidental newlines, carriage returns, spaces, and trailing slashes
+    envBase = String(envBase).trim().replace(/[\r\n\s]+/g, "").replace(/\/+$/, "");
+  }
+  if (envBase && envBase.startsWith("http")) {
+    return envBase;
+  }
+  // If hosted on Render, automatically route to deployed backend
+  if (typeof window !== "undefined" && window.location.hostname.includes("onrender.com")) {
+    return "https://notecheck-backend.onrender.com";
+  }
+  return "http://127.0.0.1:8000";
+};
+
+const API_BASE = getApiBase();
 
 export default function App() {
   const [selectedFile, setSelectedFile] = useState(null);
@@ -285,6 +301,8 @@ export default function App() {
                 backgroundColor:
                   backendOnline === "ready"
                     ? "#10b981"
+                    : backendOnline === "offline"
+                    ? "#ef4444"
                     : "#f59e0b",
                 animation: backendOnline === "ready" ? "none" : "pulse 1.5s infinite",
               }}
@@ -292,6 +310,8 @@ export default function App() {
             <span style={styles.statusText}>
               {backendOnline === "ready"
                 ? "Model Ready"
+                : backendOnline === "offline"
+                ? "Reconnecting..."
                 : "Connecting..."}
             </span>
           </div>
