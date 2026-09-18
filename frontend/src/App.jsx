@@ -14,6 +14,7 @@ export default function App() {
   const fileInputRef = useRef(null);
   // --- auth state ---
   const [token, setToken] = useState(() => localStorage.getItem("jaaltaka_token") || "");
+  const [refreshToken, setRefreshToken] = useState(() => localStorage.getItem("jaaltaka_refresh_token") || "");
   const [user, setUser] = useState(() => {
     try { return JSON.parse(localStorage.getItem("jaaltaka_user") || "null"); } catch { return null; }
   });
@@ -31,13 +32,61 @@ export default function App() {
 
   useEffect(() => {
     if (token) {
-      fetchMe(token);
-      fetchHistory(token);
+      fetchMe();
+      fetchHistory();
     }
     // eslint-disable-next-line
   }, [token]);
 
   const authHeaders = (t = token) => ({ Authorization: `Bearer ${t}` });
+
+  const refreshTokens = async () => {
+    const curRefresh = localStorage.getItem("jaaltaka_refresh_token");
+    if (!curRefresh) {
+      logout();
+      return null;
+    }
+    try {
+      const res = await fetch(`${API_BASE}/auth/refresh`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ refresh_token: curRefresh }),
+      });
+      if (!res.ok) {
+        logout();
+        return null;
+      }
+      const data = await res.json();
+      setToken(data.access_token);
+      setRefreshToken(data.refresh_token);
+      localStorage.setItem("jaaltaka_token", data.access_token);
+      localStorage.setItem("jaaltaka_refresh_token", data.refresh_token);
+      return data.access_token;
+    } catch {
+      logout();
+      return null;
+    }
+  };
+
+  const authFetch = async (url, options = {}) => {
+    let currentTok = token || localStorage.getItem("jaaltaka_token");
+    const headers = {
+      ...(options.headers || {}),
+      Authorization: `Bearer ${currentTok}`,
+    };
+    let res = await fetch(url, { ...options, headers });
+    if (res.status === 401) {
+      const newTok = await refreshTokens();
+      if (newTok) {
+        const retryHeaders = {
+          ...(options.headers || {}),
+          Authorization: `Bearer ${newTok}`,
+        };
+        res = await fetch(url, { ...options, headers: retryHeaders });
+      }
+    }
+    return res;
+  };
 
   const checkHealth = async () => {
     try {
@@ -53,8 +102,12 @@ export default function App() {
     }
   };
 
-  const saveSession = (tok, usr) => {
+  const saveSession = (tok, refTok, usr) => {
     setToken(tok);
+    if (refTok) {
+      setRefreshToken(refTok);
+      localStorage.setItem("jaaltaka_refresh_token", refTok);
+    }
     setUser(usr);
     localStorage.setItem("jaaltaka_token", tok);
     localStorage.setItem("jaaltaka_user", JSON.stringify(usr));
@@ -62,36 +115,38 @@ export default function App() {
 
   const logout = () => {
     setToken("");
+    setRefreshToken("");
     setUser(null);
     setHistory([]);
     setAdminStats(null);
     localStorage.removeItem("jaaltaka_token");
+    localStorage.removeItem("jaaltaka_refresh_token");
     localStorage.removeItem("jaaltaka_user");
   };
 
-  const fetchMe = async (t) => {
+  const fetchMe = async () => {
     try {
-      const res = await fetch(`${API_BASE}/auth/me`, { headers: authHeaders(t) });
+      const res = await authFetch(`${API_BASE}/auth/me`);
       if (res.status === 401) { logout(); return; }
       if (res.ok) {
         const me = await res.json();
         setUser(me);
         localStorage.setItem("jaaltaka_user", JSON.stringify(me));
-        if (me.role === "admin") fetchAdminStats(t);
+        if (me.role === "admin") fetchAdminStats();
       }
     } catch { /* ignore */ }
   };
 
-  const fetchHistory = async (t) => {
+  const fetchHistory = async () => {
     try {
-      const res = await fetch(`${API_BASE}/history?limit=10`, { headers: authHeaders(t) });
+      const res = await authFetch(`${API_BASE}/history?limit=10`);
       if (res.ok) setHistory(await res.json());
     } catch { /* ignore */ }
   };
 
-  const fetchAdminStats = async (t) => {
+  const fetchAdminStats = async () => {
     try {
-      const res = await fetch(`${API_BASE}/admin/overview`, { headers: authHeaders(t) });
+      const res = await authFetch(`${API_BASE}/admin/overview`);
       if (res.ok) setAdminStats(await res.json());
     } catch { /* ignore */ }
   };
@@ -112,9 +167,9 @@ export default function App() {
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(data.detail || "Authentication failed");
-      saveSession(data.access_token, data.user);
-      fetchHistory(data.access_token);
-      if (data.user?.role === "admin") fetchAdminStats(data.access_token);
+      saveSession(data.access_token, data.refresh_token, data.user);
+      fetchHistory();
+      if (data.user?.role === "admin") fetchAdminStats();
     } catch (err) {
       setError(err.message);
     } finally {
@@ -168,9 +223,8 @@ export default function App() {
     formData.append("file", selectedFile);
 
     try {
-      const response = await fetch(`${API_BASE}/predict`, {
+      const response = await authFetch(`${API_BASE}/predict`, {
         method: "POST",
-        headers: authHeaders(),
         body: formData,
       });
 
@@ -189,8 +243,8 @@ export default function App() {
       if (data.note_detected_and_cropped) {
         setViewTab("cropped");
       }
-      fetchHistory(token);
-      if (user?.role === "admin") fetchAdminStats(token);
+      fetchHistory();
+      if (user?.role === "admin") fetchAdminStats();
     } catch (err) {
       setError(err.message || "Failed to analyze banknote image");
     } finally {

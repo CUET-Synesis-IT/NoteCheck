@@ -14,6 +14,7 @@ from model_loader import load_banknote_model, process_banknote_image, CLASS_NAME
 from database import init_db, get_db, User, Scan
 from auth import (
     hash_password, verify_password, create_access_token,
+    create_refresh_token, verify_refresh_token,
     get_current_user, require_admin,
 )
 
@@ -73,8 +74,19 @@ class LoginIn(BaseModel):
 
 class TokenOut(BaseModel):
     access_token: str
+    refresh_token: str
     token_type: str = "bearer"
     user: dict
+
+
+class RefreshIn(BaseModel):
+    refresh_token: str
+
+
+class RefreshOut(BaseModel):
+    access_token: str
+    refresh_token: str
+    token_type: str = "bearer"
 
 
 class PredictionResponse(BaseModel):
@@ -99,7 +111,8 @@ def register(data: RegisterIn, db: Session = Depends(get_db)):
     db.commit()
     db.refresh(user)
     token = create_access_token(user.id, user.email, user.role)
-    return TokenOut(access_token=token,
+    refresh_tok = create_refresh_token(user.id)
+    return TokenOut(access_token=token, refresh_token=refresh_tok,
                     user={"id": user.id, "name": user.name, "email": user.email, "role": user.role})
 
 
@@ -110,7 +123,8 @@ def login(data: LoginIn, db: Session = Depends(get_db)):
     if not user or not verify_password(data.password, user.password_hash):
         raise HTTPException(status_code=401, detail="Invalid email or password.")
     token = create_access_token(user.id, user.email, user.role)
-    return TokenOut(access_token=token,
+    refresh_tok = create_refresh_token(user.id)
+    return TokenOut(access_token=token, refresh_token=refresh_tok,
                     user={"id": user.id, "name": user.name, "email": user.email, "role": user.role})
 
 
@@ -121,8 +135,21 @@ def login_form(form: OAuth2PasswordRequestForm = Depends(), db: Session = Depend
     if not user or not verify_password(form.password, user.password_hash):
         raise HTTPException(status_code=401, detail="Invalid email or password.")
     token = create_access_token(user.id, user.email, user.role)
-    return TokenOut(access_token=token,
+    refresh_tok = create_refresh_token(user.id)
+    return TokenOut(access_token=token, refresh_token=refresh_tok,
                     user={"id": user.id, "name": user.name, "email": user.email, "role": user.role})
+
+
+@app.post("/auth/refresh", response_model=RefreshOut)
+def refresh_session(data: RefreshIn, db: Session = Depends(get_db)):
+    """Exchanges a valid refresh token for a new access token and fresh refresh token."""
+    user_id = verify_refresh_token(data.refresh_token)
+    user = db.query(User).filter(User.id == user_id).first()
+    if not user:
+        raise HTTPException(status_code=401, detail="User account no longer exists.")
+    new_token = create_access_token(user.id, user.email, user.role)
+    new_refresh = create_refresh_token(user.id)
+    return RefreshOut(access_token=new_token, refresh_token=new_refresh)
 
 
 @app.get("/auth/me")

@@ -66,39 +66,64 @@ def four_point_transform(image, pts):
     M = cv2.getPerspectiveTransform(rect, dst)
     return cv2.warpPerspective(image, M, (maxWidth, maxHeight))
 
+def enhance_lighting_clahe(bgr_image: np.ndarray, clip_limit: float = 2.0, tile_size: int = 8) -> np.ndarray:
+    """
+    Equalizes illumination variations (shadows, warm/cool lighting) while preserving
+    color fidelity and enhancing micro-textures on banknotes.
+    """
+    if bgr_image is None or bgr_image.size == 0:
+        return bgr_image
+    lab = cv2.cvtColor(bgr_image, cv2.COLOR_BGR2LAB)
+    l_channel, a_channel, b_channel = cv2.split(lab)
+    clahe = cv2.createCLAHE(clipLimit=clip_limit, tileGridSize=(tile_size, tile_size))
+    l_equalized = clahe.apply(l_channel)
+    lab_merged = cv2.merge((l_equalized, a_channel, b_channel))
+    return cv2.cvtColor(lab_merged, cv2.COLOR_LAB2BGR)
+
 def detect_and_crop_banknote(image_bgr: np.ndarray):
     """
-    Detects the banknote within a scene (e.g. on a table) using edge/contour analysis.
-    Returns: (cropped_bgr, was_cropped: bool)
+    Enhanced Stage 1: Isolates banknote from complex scenes/tables using
+    bilateral filtering, multi-method contour analysis, aspect-ratio validation,
+    4-point perspective rectification, and CLAHE illumination enhancement.
+    Returns: (processed_bgr, was_cropped: bool)
     """
     h, w = image_bgr.shape[:2]
-    total_area = h * w
 
-    # Downscale for faster, noise-resistant contour search
+    # Downscale for faster and noise-resistant contour search
     max_dim = 900
     scale = 1.0
     if max(h, w) > max_dim:
         scale = max_dim / max(h, w)
-        small_bgr = cv2.resize(image_bgr, (int(w * scale), int(h * scale)))
+        small_bgr = cv2.resize(image_bgr, (int(w * scale), int(h * scale)), interpolation=cv2.INTER_AREA)
     else:
         small_bgr = image_bgr.copy()
 
-    gray = cv2.cvtColor(small_bgr, cv2.COLOR_BGR2GRAY)
-    blurred = cv2.GaussianBlur(gray, (5, 5), 0)
+    # 1. Edge-preserving bilateral filter (smooths background grain while keeping note edges sharp)
+    filtered = cv2.bilateralFilter(small_bgr, 7, 50, 50)
+    gray = cv2.cvtColor(filtered, cv2.COLOR_BGR2GRAY)
 
     candidates = []
 
-    # 1. Canny edge detector
-    edges = cv2.Canny(blurred, 30, 120)
-    kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (5, 5))
-    dilated = cv2.dilate(edges, kernel, iterations=2)
-    contours, _ = cv2.findContours(dilated, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-    candidates.extend(contours)
+    # 2. Morphological gradient + Otsu thresholding (highlights boundary transitions)
+    kernel_grad = cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3))
+    grad = cv2.morphologyEx(gray, cv2.MORPH_GRADIENT, kernel_grad)
+    _, thresh_grad = cv2.threshold(grad, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+    thresh_grad = cv2.morphologyEx(thresh_grad, cv2.MORPH_CLOSE, kernel_grad, iterations=2)
+    contours_grad, _ = cv2.findContours(thresh_grad, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    candidates.extend(contours_grad)
 
-    # 2. Otsu threshold
-    _, thresh = cv2.threshold(blurred, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
-    closed = cv2.morphologyEx(thresh, cv2.MORPH_CLOSE, kernel, iterations=2)
-    contours_otsu, _ = cv2.findContours(closed, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    # 3. Canny edge detector stream
+    blurred = cv2.GaussianBlur(gray, (5, 5), 0)
+    edges = cv2.Canny(blurred, 30, 120)
+    kernel_canny = cv2.getStructuringElement(cv2.MORPH_RECT, (5, 5))
+    dilated = cv2.dilate(edges, kernel_canny, iterations=2)
+    contours_canny, _ = cv2.findContours(dilated, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    candidates.extend(contours_canny)
+
+    # 4. Standard Otsu threshold stream
+    _, thresh_otsu = cv2.threshold(blurred, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+    closed_otsu = cv2.morphologyEx(thresh_otsu, cv2.MORPH_CLOSE, kernel_canny, iterations=2)
+    contours_otsu, _ = cv2.findContours(closed_otsu, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
     candidates.extend(contours_otsu)
 
     small_area = small_bgr.shape[0] * small_bgr.shape[1]
@@ -107,21 +132,32 @@ def detect_and_crop_banknote(image_bgr: np.ndarray):
 
     for cnt in candidates:
         area = cv2.contourArea(cnt)
-        # Banknote should be between 5% and 94% of the image
-        if area < 0.05 * small_area or area > 0.94 * small_area:
+        # Banknote should occupy between 5% and 95% of the frame
+        if area < 0.05 * small_area or area > 0.95 * small_area:
+            continue
+
+        rect = cv2.minAreaRect(cnt)
+        (rw, rh) = rect[1]
+        if rw <= 10 or rh <= 10:
+            continue
+
+        # Aspect ratio filter: accommodate perspective foreshortening & camera angles (~1.15 to 3.2)
+        aspect = max(rw, rh) / min(rw, rh)
+        if not (1.15 <= aspect <= 3.2):
             continue
 
         peri = cv2.arcLength(cnt, True)
         approx = cv2.approxPolyDP(cnt, 0.025 * peri, True)
 
+        # Primary preference: strictly 4-corner convex polygon
         if len(approx) == 4 and cv2.isContourConvex(approx):
             if area > best_area:
                 best_area = area
                 best_poly = approx.reshape(4, 2)
         else:
-            rect = cv2.minAreaRect(cnt)
-            box_area = rect[1][0] * rect[1][1]
-            if box_area > 0 and (area / box_area) > 0.60:
+            # Fallback: oriented bounding box if contour fills at least 65% of minimum area box
+            box_area = rw * rh
+            if box_area > 0 and (area / box_area) > 0.65:
                 if area > best_area:
                     best_area = area
                     best_poly = cv2.boxPoints(rect)
@@ -131,12 +167,15 @@ def detect_and_crop_banknote(image_bgr: np.ndarray):
         cropped_bgr = four_point_transform(image_bgr, orig_pts)
         ch, cw = cropped_bgr.shape[:2]
         if ch > 20 and cw > 20:
-            # Rotate if vertically oriented to standard horizontal banknote orientation
+            # Ensure standard horizontal banknote orientation (width >= height)
             if ch > cw:
                 cropped_bgr = cv2.rotate(cropped_bgr, cv2.ROTATE_90_CLOCKWISE)
-            return cropped_bgr, True
+            # Apply CLAHE lighting normalization
+            enhanced_crop = enhance_lighting_clahe(cropped_bgr)
+            return enhanced_crop, True
 
-    return image_bgr, False
+    # If no distinct note boundary detected, return lighting-normalized original image
+    return enhance_lighting_clahe(image_bgr), False
 
 def process_banknote_image(image_bytes: bytes):
     """
