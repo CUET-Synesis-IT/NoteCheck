@@ -285,17 +285,14 @@ export default function App() {
                 backgroundColor:
                   backendOnline === "ready"
                     ? "#10b981"
-                    : backendOnline === "no-model"
-                    ? "#f59e0b"
-                    : "#ef4444",
+                    : "#f59e0b",
+                animation: backendOnline === "ready" ? "none" : "pulse 1.5s infinite",
               }}
             />
             <span style={styles.statusText}>
               {backendOnline === "ready"
                 ? "Model Ready"
-                : backendOnline === "no-model"
-                ? "Loading Model..."
-                : "FastAPI Offline"}
+                : "Connecting..."}
             </span>
           </div>
           {user && (
@@ -327,12 +324,12 @@ export default function App() {
                 style={styles.input} required minLength={2} />
             )}
             <input placeholder="Email" type="email" value={authForm.email}
-              onChange={(e) => setAuthForm({ ...authForm, email: e.target.value })}
-              style={styles.input} required />
+                onChange={(e) => setAuthForm({ ...authForm, email: e.target.value })}
+                style={styles.input} required />
             <input placeholder="Password (min 6)" type="password" value={authForm.password}
-              onChange={(e) => setAuthForm({ ...authForm, password: e.target.value })}
-              style={styles.input} required minLength={6} />
-            <button type="submit" disabled={authLoading || backendOnline !== "ready"}
+                onChange={(e) => setAuthForm({ ...authForm, password: e.target.value })}
+                style={styles.input} required minLength={6} />
+            <button type="submit" disabled={authLoading}
               style={{ ...styles.btn, ...styles.btnPrimary, opacity: authLoading ? 0.6 : 1 }}>
               {authLoading ? "Please wait..." : authMode === "login" ? "Login" : "Register"}
             </button>
