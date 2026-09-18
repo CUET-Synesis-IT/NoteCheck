@@ -442,8 +442,28 @@ export default function App() {
             )}
 
             {error && (
-              <div style={styles.errorBox}>
-                <span>⚠️ {error}</span>
+              <div
+                style={
+                  error.toLowerCase().includes("bank note") || error.toLowerCase().includes("banknote")
+                    ? styles.notBanknoteBanner
+                    : styles.errorBox
+                }
+              >
+                {error.toLowerCase().includes("bank note") || error.toLowerCase().includes("banknote") ? (
+                  <div style={{ display: "flex", alignItems: "flex-start", gap: "12px" }}>
+                    <span style={{ fontSize: "28px", lineHeight: "1" }}>🚫</span>
+                    <div>
+                      <h4 style={{ margin: "0 0 4px 0", fontSize: "1.05rem", fontWeight: "700", color: "#f87171" }}>
+                        Please upload a bank note
+                      </h4>
+                      <p style={{ margin: 0, fontSize: "0.85rem", color: "#fecaca", lineHeight: "1.4" }}>
+                        The uploaded image was not recognized as a banknote. Please upload a clear photo or scan of a currency note (genuine or counterfeit). Photos of people, animals, objects, or documents are not accepted.
+                      </p>
+                    </div>
+                  </div>
+                ) : (
+                  <span>⚠️ {error}</span>
+                )}
               </div>
             )}
           </div>
@@ -457,10 +477,18 @@ export default function App() {
 
             {!result && !loading && (
               <div style={styles.emptyState}>
-                <div style={styles.emptyIcon}>🔍</div>
-                <h3 style={styles.emptyTitle}>Awaiting Banknote</h3>
+                <div style={styles.emptyIcon}>
+                  {error && (error.toLowerCase().includes("bank note") || error.toLowerCase().includes("banknote")) ? "🚫" : "🔍"}
+                </div>
+                <h3 style={{ ...styles.emptyTitle, color: error && (error.toLowerCase().includes("bank note") || error.toLowerCase().includes("banknote")) ? "#f87171" : "#cbd5e1" }}>
+                  {error && (error.toLowerCase().includes("bank note") || error.toLowerCase().includes("banknote"))
+                    ? "Please Upload a Bank Note"
+                    : "Awaiting Banknote"}
+                </h3>
                 <p style={styles.emptyText}>
-                  Upload an image and click "Verify Authenticity" to automatically isolate the note and inspect.
+                  {error && (error.toLowerCase().includes("bank note") || error.toLowerCase().includes("banknote"))
+                    ? "Non-banknote image detected. Only valid currency notes can be verified."
+                    : "Upload an image and click \"Verify Authenticity\" to automatically isolate the note and inspect."}
                 </p>
               </div>
             )}
@@ -770,6 +798,15 @@ const styles = {
     borderRadius: "8px",
     color: "#fca5a5",
     fontSize: "0.88rem",
+  },
+  notBanknoteBanner: {
+    marginTop: "16px",
+    padding: "16px 18px",
+    backgroundColor: "rgba(239, 68, 68, 0.2)",
+    border: "2px solid #ef4444",
+    borderRadius: "12px",
+    color: "#fecaca",
+    boxShadow: "0 4px 14px rgba(239, 68, 68, 0.2)",
   },
   emptyState: {
     flex: 1,

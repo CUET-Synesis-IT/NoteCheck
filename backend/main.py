@@ -10,7 +10,13 @@ from sqlalchemy.orm import Session
 from sqlalchemy import func
 import torch
 
-from model_loader import load_banknote_model, process_banknote_image, CLASS_NAMES
+from model_loader import (
+    load_banknote_model,
+    load_detector_model,
+    process_banknote_image,
+    NotABanknoteError,
+    CLASS_NAMES,
+)
 from database import init_db, get_db, User, Scan
 from auth import (
     hash_password, verify_password, create_access_token,
@@ -36,11 +42,12 @@ app.add_middleware(
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 MODEL_PATH = os.path.join(BASE_DIR, "models", "best_deit.pth")
 model = None
+detector = None
 
 
 @app.on_event("startup")
 def load_model_on_startup():
-    global model
+    global model, detector
     init_db()
     # seed default admin: admin@jaaltaka.com / Admin123!
     from database import SessionLocal
@@ -58,6 +65,12 @@ def load_model_on_startup():
         print(f"[INFO] Model successfully loaded from: {MODEL_PATH}")
     except Exception as e:
         print(f"[WARNING] Could not load model: {e}")
+    try:
+        detector = load_detector_model()
+        if detector is not None:
+            print("[INFO] Banknote detector successfully loaded")
+    except Exception as e:
+        print(f"[WARNING] Could not load banknote detector: {e}")
 
 
 # ---------- schemas ----------
@@ -163,6 +176,7 @@ def health():
     return {
         "status": "online",
         "model_loaded": model is not None,
+        "detector_loaded": detector is not None,
         "model_path": MODEL_PATH
     }
 
@@ -185,8 +199,8 @@ async def predict(file: UploadFile = File(...),
         contents = await file.read()
         start_time = time.time()
 
-        # Isolate banknote from background/table & convert to tensor
-        input_tensor, cropped_b64, was_cropped = process_banknote_image(contents)
+        # Isolate banknote from background/table, verify it is a banknote, & convert to tensor
+        input_tensor, cropped_b64, was_cropped = process_banknote_image(contents, detector=detector)
 
         # Model Inference
         with torch.no_grad():
@@ -222,9 +236,13 @@ async def predict(file: UploadFile = File(...),
             cropped_banknote_base64=cropped_b64,
             scan_id=scan.id,
         )
+    except NotABanknoteError:
+        raise HTTPException(status_code=400, detail="Please upload a bank note")
     except HTTPException:
         raise
     except Exception as e:
+        if "Please upload a bank note" in str(e):
+            raise HTTPException(status_code=400, detail="Please upload a bank note")
         raise HTTPException(status_code=500, detail=f"Inference error: {str(e)}")
 
 
